@@ -27,10 +27,10 @@ public:
         BOOST_ASSERT(fctx != nullptr);
         BOOST_ASSERT(!fctx->ready_is_linked());
 
-        if (fctx->is_context(boost::fibers::type::main_context))
+        if (fctx == _io_fctx)
         {
-            _main_fctx = fctx;
-            _main_ctx_awakened = true;
+            BOOST_ASSERT(_io_fctx_resumed);
+            _io_fctx_awakened = true;
         }
         else
         {
@@ -47,16 +47,16 @@ public:
             return fctx;
         }
 
-        if (_main_ctx_awakened)
+        if (_io_fctx_awakened)
         {
-            _main_ctx_awakened = false;
-            return _main_fctx;
+            _io_fctx_awakened = false;
+            return _io_fctx;
         }
 
-        if (_io_run_in_main_ctx && !_io_main_ctx_resumed && _io_ctx->stopped())
+        if (!_io_fctx_resumed && _io_ctx->stopped())
         {
-            _io_main_ctx_resumed = true;
-            return _main_fctx;
+            _io_fctx_resumed = true;
+            return _io_fctx;
         }
 
         return nullptr;
@@ -81,15 +81,10 @@ private:
     {
         _io_ctx->post([this] {
             auto fctx = boost::fibers::context::active();
-            if (fctx->is_context(boost::fibers::type::main_context))
+            if (!fctx->is_context(boost::fibers::type::dispatcher_context))
             {
-                _main_fctx = fctx;
-                _io_run_in_main_ctx = true;
+                _io_fctx = fctx;
                 fctx->suspend();
-            }
-            else if (!fctx->is_context(boost::fibers::type::dispatcher_context))
-            {
-                fctx->yield();
             }
         });
     }
@@ -100,10 +95,9 @@ private:
     std::shared_ptr<boost::asio::io_context> _io_ctx;
     WorkGuard _io_work_guard;
     boost::fibers::scheduler::ready_queue_type _worker_queue;
-    boost::fibers::context* _main_fctx = nullptr;
-    bool _io_run_in_main_ctx = false;
-    bool _io_main_ctx_resumed = false;
-    bool _main_ctx_awakened = false;
+    boost::fibers::context* _io_fctx = nullptr;
+    bool _io_fctx_resumed = false;
+    bool _io_fctx_awakened = false;
 };
 
 }

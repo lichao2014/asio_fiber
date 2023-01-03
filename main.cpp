@@ -41,6 +41,7 @@ int main()
 
     this_fiber::yield();
 
+#if 0
     fibers::fiber([&, acceptor] {
         while (true)
         {
@@ -80,13 +81,13 @@ int main()
             }).detach();
         }
     }).detach();
-
+#endif
     fibers::fiber([&, ioc] {
         net::steady_timer t(*ioc);
         while (!ioc->stopped())
         {
-            t.expires_after(std::chrono::seconds(1));
-            auto sig = t.async_wait(asio_fiber::timeout_yield(std::chrono::seconds(10)));
+            t.expires_after(std::chrono::seconds(10));
+            auto sig = t.async_wait(asio_fiber::timeout_yield(std::chrono::seconds(1)));
             if (sig)
             {
                 break;
@@ -115,8 +116,8 @@ int main()
     }).detach();
 
     this_fiber::yield();
-
-    //ioc->run();
+    ioc->run();
+    this_fiber::yield();
     acceptor->close();
 #endif
 
