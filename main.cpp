@@ -19,12 +19,12 @@ int main()
 {
     auto ioc = std::make_shared<net::io_context>();
     fibers::use_scheduling_algorithm<asio_fiber::Algorithm>(ioc);
-
+    this_fiber::yield();
 #if 1
-    net::ip::tcp::acceptor acceptor(*ioc, net::ip::tcp::v4());
+    auto acceptor = std::make_shared<net::ip::tcp::acceptor>(*ioc, net::ip::tcp::v4());
 
     boost::system::error_code ec;
-    acceptor.bind({ net::ip::tcp::v4(), 8080 }, ec);
+    acceptor->bind({ net::ip::tcp::v4(), 8080 }, ec);
     if (ec)
     {
         std::clog << "bind failed" << ec.message() << std::endl;
@@ -32,17 +32,19 @@ int main()
         return -1;
     }
 
-    acceptor.listen(net::socket_base::max_listen_connections, ec);
+    acceptor->listen(net::socket_base::max_listen_connections, ec);
     if (ec)
     {
         ioc->stop();
         return -1;
     }
 
-    fibers::fiber([&] {
+    this_fiber::yield();
+
+    fibers::fiber([&, acceptor] {
         while (true)
         {
-            auto client = acceptor.async_accept(asio_fiber::yield);
+            auto client = acceptor->async_accept(asio_fiber::yield);
             if (!client)
             {
                 break;
@@ -80,6 +82,23 @@ int main()
     }).detach();
 
     fibers::fiber([&, ioc] {
+        net::steady_timer t(*ioc);
+        while (!ioc->stopped())
+        {
+            t.expires_after(std::chrono::seconds(1));
+            auto sig = t.async_wait(asio_fiber::timeout_yield(std::chrono::seconds(10)));
+            if (sig)
+            {
+                break;
+            }
+
+            std::clog << "sig=" << sig.error() << std::endl;
+        }
+
+        ioc->stop();
+    }).detach();
+
+    fibers::fiber([&, ioc] {
         net::signal_set t(*ioc, SIGTERM, SIGINT);
         while (!ioc->stopped())
         {
@@ -95,8 +114,10 @@ int main()
         ioc->stop();
     }).detach();
 
-    ioc->run();
-    acceptor.close();
+    this_fiber::yield();
+
+    //ioc->run();
+    acceptor->close();
 #endif
 
     return 0;

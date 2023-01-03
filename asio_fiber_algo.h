@@ -27,13 +27,10 @@ public:
         BOOST_ASSERT(fctx != nullptr);
         BOOST_ASSERT(!fctx->ready_is_linked());
 
-        if (fctx->is_context(boost::fibers::type::dispatcher_context))
-        {
-            _disp_fctx = fctx;
-        }
-        else if (fctx->is_context(boost::fibers::type::main_context))
+        if (fctx->is_context(boost::fibers::type::main_context))
         {
             _main_fctx = fctx;
+            _main_ctx_awakened = true;
         }
         else
         {
@@ -43,29 +40,26 @@ public:
 
     boost::fibers::context* pick_next() noexcept override
     {
-        boost::fibers::context* fctx = nullptr;
         if (!_worker_queue.empty())
         {
-            fctx = &(_worker_queue.front());
+            auto fctx = &(_worker_queue.front());
             _worker_queue.pop_front();
             return fctx;
         }
 
-        fctx = _disp_fctx;
-        if (fctx)
+        if (_main_ctx_awakened)
         {
-            _disp_fctx = nullptr;
-            return fctx;
+            _main_ctx_awakened = false;
+            return _main_fctx;
         }
 
-        fctx = _main_fctx;
-        if (fctx)
+        if (_io_run_in_main_ctx && !_io_main_ctx_resumed && _io_ctx->stopped())
         {
-            _main_fctx = nullptr;
-            return fctx;
+            _io_main_ctx_resumed = true;
+            return _main_fctx;
         }
 
-        return fctx;
+        return nullptr;
     }
 
     bool has_ready_fibers() const noexcept override
@@ -85,10 +79,17 @@ public:
 private:
     void io_yield() noexcept
     {
-        _io_ctx->post([] {
-            if (!boost::fibers::context::active()->is_context(boost::fibers::type::dispatcher_context))
+        _io_ctx->post([this] {
+            auto fctx = boost::fibers::context::active();
+            if (fctx->is_context(boost::fibers::type::main_context))
             {
-                boost::this_fiber::yield();
+                _main_fctx = fctx;
+                _io_run_in_main_ctx = true;
+                fctx->suspend();
+            }
+            else if (!fctx->is_context(boost::fibers::type::dispatcher_context))
+            {
+                fctx->yield();
             }
         });
     }
@@ -99,8 +100,10 @@ private:
     std::shared_ptr<boost::asio::io_context> _io_ctx;
     WorkGuard _io_work_guard;
     boost::fibers::scheduler::ready_queue_type _worker_queue;
-    boost::fibers::context* _disp_fctx = nullptr;
     boost::fibers::context* _main_fctx = nullptr;
+    bool _io_run_in_main_ctx = false;
+    bool _io_main_ctx_resumed = false;
+    bool _main_ctx_awakened = false;
 };
 
 }

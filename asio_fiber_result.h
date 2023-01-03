@@ -155,7 +155,6 @@ public:
     using return_type = system::result<typename asio_fiber::YieldReturn<Ts...>::type>;
     using yield_policy = asio_fiber::YieldPolicy<Timeout>;
 
-
     class completion_handler_type
     {
     public:
