@@ -9,24 +9,22 @@
 #include "asio_fiber_result.h"
 #include "asio_fiber_algo.h"
 
-using namespace boost;
-
+namespace fibers = boost::fibers;
+namespace this_fiber = boost::this_fiber;
+namespace net = boost::asio;
+namespace beast = boost::beast;
 namespace http = beast::http;
-
-struct AppCtx : asio::io_context
-{
-    bool is_started = false;
-};
 
 int main()
 {
-    auto ioc = std::make_shared<AppCtx>();
+    auto ioc = std::make_shared<net::io_context>();
     fibers::use_scheduling_algorithm<asio_fiber::Algorithm>(ioc);
 
-    asio::ip::tcp::acceptor acceptor(*ioc, asio::ip::tcp::v4());
+#if 1
+    net::ip::tcp::acceptor acceptor(*ioc, net::ip::tcp::v4());
 
     boost::system::error_code ec;
-    acceptor.bind({ asio::ip::tcp::v4(), 8080 }, ec);
+    acceptor.bind({ net::ip::tcp::v4(), 8080 }, ec);
     if (ec)
     {
         std::clog << "bind failed" << ec.message() << std::endl;
@@ -34,7 +32,7 @@ int main()
         return -1;
     }
 
-    acceptor.listen(asio::socket_base::max_listen_connections, ec);
+    acceptor.listen(net::socket_base::max_listen_connections, ec);
     if (ec)
     {
         ioc->stop();
@@ -68,12 +66,9 @@ int main()
                     return;
                 }
 
-                beast::flat_buffer x;
+                http::response<http::string_body> resp{ http::status::ok, req.version() };
 
-                http::response<http::file_body> resp{ http::status::ok, req.version() };
-
-                beast::error_code ec;
-                resp.body().open("D:/proj/c/boost_test/main.cpp", beast::file_mode::read, ec);
+                resp.body() = "hello";
                 resp.set(http::field::server, BOOST_BEAST_VERSION_STRING);
                 resp.set(http::field::content_type, "text/html");
 
@@ -85,12 +80,7 @@ int main()
     }).detach();
 
     fibers::fiber([&, ioc] {
-        if (!ioc->is_started)
-        {
-            return;
-        }
-
-        asio::signal_set t(*ioc, SIGTERM, SIGINT);
+        net::signal_set t(*ioc, SIGTERM, SIGINT);
         while (!ioc->stopped())
         {
             auto sig = t.async_wait(asio_fiber::yield);
@@ -105,10 +95,9 @@ int main()
         ioc->stop();
     }).detach();
 
-    ioc->is_started = true;
     ioc->run();
-
     acceptor.close();
+#endif
 
     return 0;
 }

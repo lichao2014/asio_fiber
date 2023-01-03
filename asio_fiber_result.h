@@ -24,7 +24,7 @@ public:
     using Clock = std::chrono::steady_clock;
 
     constexpr explicit YieldContext(Clock::time_point tp = (Clock::time_point::max)()) noexcept : _expired(tp) {}
-    constexpr explicit YieldContext(Clock::duration dur) noexcept : _expired(Clock::now() + dur) {}
+    explicit YieldContext(Clock::duration dur) noexcept : _expired(Clock::now() + dur) {}
 
     Clock::time_point get_expired() const noexcept { return _expired; }
     bool has_expired() const noexcept { return _expired != (Clock::time_point::max)(); }
@@ -32,10 +32,10 @@ private:
     Clock::time_point _expired;
 };
 
-constexpr YieldContext<false> yield;
+constexpr YieldContext<false> yield{};
 
 template<typename T>
-constexpr YieldContext<true> timeout_yield(T&& t) { return YieldContext<true>{ std::forward<T>(t) }; }
+YieldContext<true> timeout_yield(T&& t) { return YieldContext<true>{ std::forward<T>(t) }; }
 
 template<typename ... Ts>
 struct YieldReturn
@@ -66,7 +66,7 @@ public:
         if (token.has_expired())
         {
             _timeout_ctx.emplace(token.get_expired());
-            h.set_slot(_timeout_ctx->cs.slot());
+            h.set_slot(_timeout_ctx->slot());
         }
     }
 
@@ -82,7 +82,7 @@ public:
             }
 
             _is_timeout = true;
-            _timeout_ctx->cs.emit(boost::asio::cancellation_type::total);
+            _timeout_ctx->emit(boost::asio::cancellation_type::total);
         }
 
         return false;
@@ -99,20 +99,19 @@ public:
         {
             if (ec)
             {
-                return_value = std::forward<E>(ec);
+                return_value = Return(std::forward<E>(ec));
             }
             else
             {
-                return_value.emplace(std::forward<Args>(args)...);
+                return_value = Return(std::forward<Args>(args)...);
             }
         }
     }
 
 private:
-    struct TimeoutCtx
+    struct TimeoutCtx : boost::asio::cancellation_signal
     {
         std::chrono::steady_clock::time_point tp;
-        boost::asio::cancellation_signal cs;
 
         explicit TimeoutCtx(std::chrono::steady_clock::time_point tp) noexcept : tp(tp) {}
     };
@@ -135,11 +134,11 @@ public:
     {
         if (ec)
         {
-            return_value = std::forward<E>(ec);
+            return_value = Return(std::forward<E>(ec));
         }
         else
         {
-            return_value.emplace(std::forward<Args>(args)...);
+            return_value = Return(std::forward<Args>(args)...);
         }
     }
 };
@@ -154,6 +153,8 @@ class async_result<asio_fiber::YieldContext<Timeout>, void(boost::system::error_
 {
 public:
     using return_type = system::result<typename asio_fiber::YieldReturn<Ts...>::type>;
+    using yield_policy = asio_fiber::YieldPolicy<Timeout>;
+
 
     class completion_handler_type
     {
@@ -186,7 +187,7 @@ public:
         BOOST_ASSERT(_fctx != nullptr);
         h.set_result(this);
 
-        YieldPolicy::init(h);
+        yield_policy::init(h);
     }
 
     return_type get()
@@ -195,7 +196,7 @@ public:
         {
             _is_waiting = true;
 
-            if (YieldPolicy::wait(_fctx, _is_done))
+            if (yield_policy::wait(_fctx, _is_done))
             {
                 break;
             }
@@ -210,14 +211,20 @@ private:
     template<typename E, typename ... Args>
     void on_completion(E&& ec, Args&& ... args) noexcept
     {
-        YieldPolicy::on_completion(_return_value, std::forward<E>(ec), std::forward<Args>(args)...);
+        yield_policy::on_completion(_return_value, std::forward<E>(ec), std::forward<Args>(args)...);
 
         BOOST_ASSERT(!_is_done);
         _is_done = true;
 
         if (_is_waiting)
         {
-            boost::fibers::context::active()->schedule(_fctx);
+            auto fctx = boost::fibers::context::active();
+            fctx->schedule(_fctx);
+
+            if (!fctx->is_context(boost::fibers::type::dispatcher_context))
+            {
+                fctx->yield();
+            }
         }
     }
 
