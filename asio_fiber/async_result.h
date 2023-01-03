@@ -219,11 +219,6 @@ private:
         {
             auto fctx = boost::fibers::context::active();
             fctx->schedule(_fctx);
-
-            if (!fctx->is_context(boost::fibers::type::dispatcher_context))
-            {
-                fctx->yield();
-            }
         }
     }
 

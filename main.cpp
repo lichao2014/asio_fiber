@@ -1,13 +1,10 @@
-#include <memory>
-#include <thread>
+#include <iostream>
 
 #include "boost/asio.hpp"
-#include "boost/fiber/future.hpp"
-#include "boost/fiber/operations.hpp"
 #include "boost/beast.hpp"
 
-#include "asio_fiber_result.h"
-#include "asio_fiber_algo.h"
+#include "asio_fiber/async_result.h"
+#include "asio_fiber/thread.h"
 
 namespace fibers = boost::fibers;
 namespace this_fiber = boost::this_fiber;
@@ -15,33 +12,25 @@ namespace net = boost::asio;
 namespace beast = boost::beast;
 namespace http = beast::http;
 
-int main()
+int async_main(const std::shared_ptr<net::io_context>& io_ctx)
 {
-    auto ioc = std::make_shared<net::io_context>();
-    fibers::use_scheduling_algorithm<asio_fiber::Algorithm>(ioc);
-    this_fiber::yield();
 #if 1
-    auto acceptor = std::make_shared<net::ip::tcp::acceptor>(*ioc, net::ip::tcp::v4());
+    auto acceptor = std::make_shared<net::ip::tcp::acceptor>(*io_ctx, net::ip::tcp::v4());
 
     boost::system::error_code ec;
     acceptor->bind({ net::ip::tcp::v4(), 8080 }, ec);
     if (ec)
     {
         std::clog << "bind failed" << ec.message() << std::endl;
-        ioc->stop();
         return -1;
     }
 
     acceptor->listen(net::socket_base::max_listen_connections, ec);
     if (ec)
     {
-        ioc->stop();
         return -1;
     }
 
-    this_fiber::yield();
-
-#if 0
     fibers::fiber([&, acceptor] {
         while (true)
         {
@@ -60,6 +49,7 @@ int main()
                 auto ret = http::async_read(client, buf, req, asio_fiber::yield);
                 if (!ret)
                 {
+                    std::clog << "client read failed,err=" << ret.error().message() << std::endl;
                     client.close();
                     return;
                 }
@@ -75,16 +65,16 @@ int main()
                 resp.set(http::field::server, BOOST_BEAST_VERSION_STRING);
                 resp.set(http::field::content_type, "text/html");
 
-                http::async_write(client, resp, asio_fiber::timeout_yield(std::chrono::seconds(1)));
+                http::async_write(client, resp, asio_fiber::yield);
 
                 client.close();
             }).detach();
         }
     }).detach();
 #endif
-    fibers::fiber([&, ioc] {
-        net::steady_timer t(*ioc);
-        while (!ioc->stopped())
+    fibers::fiber([&, io_ctx] {
+        net::steady_timer t(*io_ctx);
+        while (!io_ctx->stopped())
         {
             t.expires_after(std::chrono::seconds(10));
             auto sig = t.async_wait(asio_fiber::timeout_yield(std::chrono::seconds(1)));
@@ -95,31 +85,22 @@ int main()
 
             std::clog << "sig=" << sig.error() << std::endl;
         }
-
-        ioc->stop();
     }).detach();
 
-    fibers::fiber([&, ioc] {
-        net::signal_set t(*ioc, SIGTERM, SIGINT);
-        while (!ioc->stopped())
-        {
-            auto sig = t.async_wait(asio_fiber::yield);
-            if (sig)
-            {
-                break;
-            }
+    net::signal_set t(*io_ctx, SIGTERM, SIGINT);
+    auto sig = t.async_wait(asio_fiber::yield);
+    if (!sig)
+    {
+        std::clog << "sig=" << sig.error() << std::endl;
+    }
 
-            std::clog << "sig=" << sig.error() << std::endl;
-        }
-
-        ioc->stop();
-    }).detach();
-
-    this_fiber::yield();
-    ioc->run();
-    this_fiber::yield();
     acceptor->close();
-#endif
 
     return 0;
+}
+
+int main()
+{
+    asio_fiber::Guard guard;
+    return guard(async_main);
 }
