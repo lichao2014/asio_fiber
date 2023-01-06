@@ -143,7 +143,7 @@ struct HasCloseHelper<T, boost::void_t<decltype(std::declval<T>().close())>> : s
 template<typename T>
 using HasClose = HasCloseHelper<T>;
 
-template<typename T, template<typename T> class ... Traits>
+template<typename T, template<typename> class ... Traits>
 using TestTraits = boost::disjunction<Traits<T>...>;
 
 template<typename T>
@@ -158,8 +158,6 @@ struct StopTraits : TestTraits<T, HasCancel, HasStop, HasClose>
 };
 }
 
-class ThreadContext;
-
 template<typename T>
 class StopGuard : public T, public StopToken
 {
@@ -173,8 +171,8 @@ public:
         stop_source.add_token(*this);
     }
 
-    template<typename ... Args>
-    StopGuard(ThreadContext& ctx, Args&& ... args)
+    template<typename C, typename ... Args, typename = decltype(C::stop_source)>
+    StopGuard(C& ctx, Args&& ... args)
         : T(ctx, std::forward<Args>(args)...)
     {
         ctx.stop_source.add_token(*this);

@@ -121,7 +121,7 @@ struct StreamTraits
         stream.close();
     }
 
-    static typename typename std::decay<AsyncStream>::type::endpoint_type
+    static typename std::decay<AsyncStream>::type::endpoint_type
     local_endpoint(const AsyncStream& stream)
     {
         return stream.local_endpoint();
@@ -149,10 +149,6 @@ template<typename AsyncStream>
 boost::system::result<void>
 service_fn(AsyncStream client, const std::shared_ptr<AppCtx>& app_ctx)
 {
-    BOOST_SCOPE_EXIT(&client) {
-        StreamTraits<AsyncStream>::close(client);
-    } BOOST_SCOPE_EXIT_END;
-
     beast::flat_buffer buf(8096);
     http::request<http::dynamic_body> req;
 
