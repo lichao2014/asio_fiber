@@ -16,35 +16,106 @@ namespace asio_fiber
 class ThreadContext : public boost::asio::io_context
 {
 public:
-    StopSource stop_source;
+    template<typename C = ThreadContext>
+    static typename std::enable_if<std::is_base_of<ThreadContext, C>::value, C *>::type
+    current() noexcept
+    {
+        return static_cast<C *>(get_instance());
+    }
 
     void stop()
     {
         this->dispatch([this] { do_stop(); });
     }
 private:
+    template<typename C>
+    friend class ThreadGuard;
+
+    void use_in_guard() { get_instance() = this; }
+
+    template<typename C>
+    friend class Object;
+
     void do_stop()
     {
-        this->stop_source.stop();
+        _stop_source.stop();
         boost::asio::io_context::stop();
+    }
+
+    static ThreadContext*& get_instance() noexcept
+    {
+        static thread_local ThreadContext* s_instance = nullptr;
+        return s_instance;
+    }
+
+    StopSource _stop_source;
+};
+
+template<typename T>
+class Object : public T, public StopToken
+{
+public:
+    static_assert(StopTraits<T>::value, "T must has stop or cancel or close");
+
+    template<typename ... Args>
+    Object(Args&& ... args)
+        : T(*ThreadContext::current(), std::forward<Args>(args)...)
+    {
+        ThreadContext::current()->_stop_source.add_token(*this);
+    }
+
+    ~Object()
+    {
+        if (this->is_linked())
+        {
+            do_stop();
+        }
+    }
+
+    template<typename C = ThreadContext>
+    C* get_thread_ctx() noexcept
+    {
+        return nullptr;
+        //return get_
+    }
+
+    bool stop(StopMode mode) override
+    {
+        do_stop();
+        return true;
+    }
+private:
+    void do_stop()
+    {
+        StopTraits<T>{}(static_cast<T&>(*this));
     }
 };
 
+template<typename C = ThreadContext>
 class ThreadGuard
 {
 public:
-    ThreadGuard() : ThreadGuard(std::make_shared<ThreadContext>()) {}
+    ThreadGuard() : ThreadGuard(std::make_shared<C>()) {}
 
-    explicit ThreadGuard(const std::shared_ptr<ThreadContext>& ctx) : _ctx(ctx)
+    explicit ThreadGuard(const std::shared_ptr<C>& ctx) noexcept : _ctx(ctx)
     {
         boost::fibers::use_scheduling_algorithm<Algorithm>(_ctx);
+        _ctx->use_in_guard();
     }
 
     ~ThreadGuard() { _ctx->stop(); }
 
     template<typename F, typename ... Args>
     auto operator()(F&& f, Args&& ... args)
-        -> decltype(f(std::declval<const std::shared_ptr<ThreadContext> &>(), args...))
+        -> decltype(f(args...))
+    {
+        auto work = boost::asio::make_work_guard(*_ctx);
+        return std::forward<F>(f)(std::forward<Args>(args)...);
+    }
+
+    template<typename F, typename ... Args>
+    auto operator()(F&& f, Args&& ... args)
+        -> decltype(f(std::declval<const std::shared_ptr<C> &>(), args...))
     {
         auto work = boost::asio::make_work_guard(*_ctx);
         return std::forward<F>(f)(_ctx, std::forward<Args>(args)...);
@@ -52,7 +123,7 @@ public:
 
     template<typename F, typename ... Args>
     auto operator()(F&& f, Args&& ... args)
-        -> decltype(f(std::declval<ThreadContext&>(), args...))
+        -> decltype(f(std::declval<C&>(), args...))
     {
         auto work = boost::asio::make_work_guard(*_ctx);
         return std::forward<F>(f)(*_ctx, std::forward<Args>(args)...);
@@ -61,16 +132,17 @@ private:
     ThreadGuard(const ThreadGuard&) = delete;
     void operator=(const ThreadGuard&) = delete;
 
-    std::shared_ptr<ThreadContext> _ctx;
+    std::shared_ptr<C> _ctx;
 };
 
-class ThreadEntry
+template<typename C = ThreadContext>
+class Thread
 {
 public:
-    ThreadEntry(): _ctx(std::make_shared<ThreadContext>()) {}
+    Thread(): _ctx(std::make_shared<C>()) {}
 
     template<typename F>
-    ThreadEntry(F&& f) : ThreadEntry()
+    Thread(F&& f) : Thread()
     {
         start(std::forward<F>(f));
     }
@@ -81,39 +153,56 @@ public:
         struct Wrap
         {
             typename std::decay<F>::type f;
-            ThreadEntry* entry;
+            Thread* owner;
 
             void operator()()
             {
-                ThreadGuard guard(entry->_ctx);
+                ThreadGuard<C> guard(this->owner->_ctx);
                 guard(std::move(this->f));
             }
         };
 
-        _th = std::thread(Wrap{ std::forward<F>(f), this });
+        _impl = std::thread(Wrap{ std::forward<F>(f), this });
     }
 
     void stop()
     {
-        if (_th.joinable())
+        _ctx->stop();
+
+        if (_impl.joinable())
         {
-            _ctx->stop();
-            _th.join();
+            _impl.join();
         }
     }
 
+    template<typename F>
+    void post(F&& f)
+    {
+        _ctx->post(std::forward<F>(f));
+    }
+
+    template<typename F>
+    void dispatch(F&& f)
+    {
+        _ctx->dispatch(std::forward<F>(f));
+    }
+
 private:
-    std::shared_ptr<ThreadContext> _ctx;
-    std::thread _th;
+    std::shared_ptr<C> _ctx;
+    std::thread _impl;
 };
 
+template<typename C = ThreadContext>
 class ThreadGroup
 {
 public:
+    ~ThreadGroup() { stop_all(); }
+
     template<typename F>
     void add_thread(F&& f)
     {
-        _threads.emplace_back(std::forward<F>(f));
+        std::unique_ptr<Thread<C>> ptr(new Thread<C>(std::forward<F>(f)));
+        _threads.emplace_back(std::move(ptr));
     }
 
     template<typename F>
@@ -125,14 +214,25 @@ public:
         }
     }
 
-    void join_all()
+    void stop_all()
     {
         for (auto&& thread : _threads)
         {
-            thread.stop();
+            thread->stop();
+        }
+
+        _threads.clear();
+    }
+
+    template<typename F>
+    void post(F f)
+    {
+        for (auto&& thread : _threads)
+        {
+            thread->post(f);
         }
     }
 private:
-    std::vector<ThreadEntry> _threads;
+    std::vector<std::unique_ptr<Thread<C>>> _threads;
 };
 }

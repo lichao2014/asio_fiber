@@ -15,9 +15,7 @@ enum class StopMode
 };
 
 class StopToken
-    : public boost::intrusive::list_base_hook<
-        boost::intrusive::link_mode<boost::intrusive::auto_unlink>
-    >
+    : public boost::intrusive::list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>
 {
 public:
     virtual ~StopToken() = default;
@@ -113,7 +111,27 @@ struct HasCancelHelper : Nothing<T> {};
 template<typename T>
 struct HasCancelHelper<T, boost::void_t<decltype(std::declval<T>().cancel())>> : std::true_type
 {
-    static void execute(T& x) { x.cancel(); }
+    static void execute(T& x)
+    {
+        try
+        {
+            x.cancel();
+        }
+        catch (...) {}
+    }
+};
+
+template<typename T>
+struct HasCancelHelper<T, boost::void_t<decltype(std::declval<T>().next_layer().cancel())>> : std::true_type
+{
+    static void execute(T& x)
+    {
+        try
+        {
+            x.next_layer().cancel();
+        }
+        catch (...) {}
+    }
 };
 
 template<typename T>
@@ -125,7 +143,27 @@ struct HasStopHelper : Nothing<T> {};
 template<typename T>
 struct HasStopHelper<T, boost::void_t<decltype(std::declval<T>().stop())>> : std::true_type
 {
-    static void execute(T& x) { x.stop(); }
+    static void execute(T& x)
+    {
+        try
+        {
+            x.stop();
+        }
+        catch (...) {}
+    }
+};
+
+template<typename T>
+struct HasStopHelper<T, boost::void_t<decltype(std::declval<T>().next_layer().stop())>> : std::true_type
+{
+    static void execute(T& x)
+    {
+        try
+        {
+            x.next_layer().stop();
+        }
+        catch (...) {}
+    }
 };
 
 template<typename T>
@@ -135,66 +173,47 @@ template<typename T, typename = boost::void_t<>>
 struct HasCloseHelper : Nothing<T> {};
 
 template<typename T>
+struct HasCloseHelper<T, boost::void_t<decltype(std::declval<T>().next_layer().close())>> : std::true_type
+{
+    static void execute(T& x)
+    {
+        try
+        {
+            x.next_layer().close();
+        }
+        catch (...) {}
+    }
+};
+
+template<typename T>
 struct HasCloseHelper<T, boost::void_t<decltype(std::declval<T>().close())>> : std::true_type
 {
-    static void execute(T& x) { x.close(); }
+    static void execute(T& x)
+    {
+        try
+        {
+            x.close();
+        }
+        catch (...) {}
+    }
 };
+
 
 template<typename T>
 using HasClose = HasCloseHelper<T>;
 
 template<typename T, template<typename> class ... Traits>
 using TestTraits = boost::disjunction<Traits<T>...>;
-
-template<typename T>
-struct StopTraits : TestTraits<T, HasCancel, HasStop, HasClose>
-{
-    static void execute(T& x)
-    {
-        HasCancel<T>::execute(x);
-        HasStop<T>::execute(x);
-        HasClose<T>::execute(x);
-    }
-};
 }
 
 template<typename T>
-class StopGuard : public T, public StopToken
+struct StopTraits : detail::TestTraits<T, detail::HasCancel, detail::HasStop, detail::HasClose>
 {
-public:
-    static_assert(detail::StopTraits<T>::value, "T must has stop or cancel or close");
-
-    template<typename ... Args>
-    StopGuard(StopSource& stop_source, Args&& ... args)
-        : T(std::forward<Args>(args)...)
+    void operator()(T& x)
     {
-        stop_source.add_token(*this);
-    }
-
-    template<typename C, typename ... Args, typename = decltype(C::stop_source)>
-    StopGuard(C& ctx, Args&& ... args)
-        : T(ctx, std::forward<Args>(args)...)
-    {
-        ctx.stop_source.add_token(*this);
-    }
-
-    ~StopGuard()
-    {
-        if (this->is_linked())
-        {
-            do_stop();
-        }
-    }
-
-    bool stop(StopMode mode) override
-    {
-        do_stop();
-        return true;
-    }
-private:
-    void do_stop()
-    {
-        detail::StopTraits<T>::execute(static_cast<T&>(*this));
+        detail::HasCancel<T>::execute(x);
+        detail::HasStop<T>::execute(x);
+        detail::HasClose<T>::execute(x);
     }
 };
 }

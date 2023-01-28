@@ -6,6 +6,7 @@
 
 #include "boost/asio/async_result.hpp"
 #include "boost/asio/error.hpp"
+#include "boost/asio/cancellation_signal.hpp"
 #include "boost/system/result.hpp"
 #include "boost/fiber/context.hpp"
 #include "boost/optional.hpp"
@@ -14,28 +15,38 @@
 namespace asio_fiber
 {
 
-template<bool Timeout>
-class YieldContext {};
-
-template<>
-class YieldContext<true> 
+class TimeoutContext
 {
 public:
     using Clock = std::chrono::steady_clock;
 
-    constexpr explicit YieldContext(Clock::time_point tp = (Clock::time_point::max)()) noexcept : _expired(tp) {}
-    explicit YieldContext(Clock::duration dur) noexcept : _expired(Clock::now() + dur) {}
+    constexpr TimeoutContext(Clock::time_point expire_at = (Clock::time_point::max)()) noexcept
+        : _expire_at(expire_at) {}
 
-    Clock::time_point get_expired() const noexcept { return _expired; }
-    bool has_expired() const noexcept { return _expired != (Clock::time_point::max)(); }
+    template<typename Rep, typename Period>
+    TimeoutContext(std::chrono::duration<Rep, Period> duration) noexcept
+        : _expire_at(Clock::now() + duration) {}
+
+    Clock::time_point expire_at() const noexcept { return _expire_at; }
+    bool has_expired() const noexcept { return _expire_at != (Clock::time_point::max)(); }
 private:
-    Clock::time_point _expired;
+    Clock::time_point _expire_at;
 };
 
-constexpr YieldContext<false> yield{};
+template<bool Timeout>
+class YieldContext {};
+
+template<>
+class YieldContext<true> : public TimeoutContext
+{
+public:
+    using TimeoutContext::TimeoutContext;
+};
+
+constexpr YieldContext<false> yield() { return {}; }
 
 template<typename T>
-YieldContext<true> timeout_yield(T&& t) { return YieldContext<true>{ std::forward<T>(t) }; }
+YieldContext<true> yield(T&& t) { return YieldContext<true>{ std::forward<T>(t) }; }
 
 template<typename ... Ts>
 struct YieldReturn
@@ -65,7 +76,7 @@ public:
         auto&& token = h.get_token();
         if (token.has_expired())
         {
-            _timeout_ctx.emplace(token.get_expired());
+            _timeout_ctx.emplace(token.expire_at());
             h.set_slot(_timeout_ctx->slot());
         }
     }
@@ -74,7 +85,7 @@ public:
     {
         if (_timeout_ctx)
         {
-            fctx->wait_until(_timeout_ctx->tp);
+            fctx->wait_until(_timeout_ctx->expire_at());
 
             if (is_done)
             {
@@ -109,11 +120,9 @@ public:
     }
 
 private:
-    struct TimeoutCtx : boost::asio::cancellation_signal
+    struct TimeoutCtx : boost::asio::cancellation_signal, TimeoutContext
     {
-        std::chrono::steady_clock::time_point tp;
-
-        explicit TimeoutCtx(std::chrono::steady_clock::time_point tp) noexcept : tp(tp) {}
+        using TimeoutContext::TimeoutContext;
     };
 
     boost::optional<TimeoutCtx> _timeout_ctx;
@@ -222,7 +231,7 @@ private:
         }
     }
 
-    return_type _return_value{ system::error_code() };
+    return_type _return_value { system::error_code() };
     fibers::context* _fctx = nullptr;
     bool _is_done = false;
     bool _is_waiting = false;

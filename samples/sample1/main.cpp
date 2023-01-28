@@ -14,8 +14,8 @@ namespace http = beast::http;
 
 boost::system::result<void> async_http(asio_fiber::ThreadContext& ctx)
 {
-    using Acceptor = asio_fiber::StopGuard<net::ip::tcp::acceptor>;
-    Acceptor acceptor{ ctx, net::ip::tcp::v4() };
+    using Acceptor = asio_fiber::Object<net::ip::tcp::acceptor>;
+    Acceptor acceptor{ net::ip::tcp::v4() };
 
     boost::system::error_code ec;
     acceptor.bind({ net::ip::tcp::v4(), 8080 }, ec);
@@ -34,7 +34,7 @@ boost::system::result<void> async_http(asio_fiber::ThreadContext& ctx)
 
     while (!ctx.stopped())
     {
-        auto client = acceptor.async_accept(asio_fiber::yield);
+        auto client = acceptor.async_accept(asio_fiber::yield());
         if (!client)
         {
             break;
@@ -46,7 +46,7 @@ boost::system::result<void> async_http(asio_fiber::ThreadContext& ctx)
             beast::flat_buffer buf(8096);
             http::request<http::dynamic_body> req;
 
-            auto ret = http::async_read(client, buf, req, asio_fiber::yield);
+            auto ret = http::async_read(client, buf, req, asio_fiber::yield());
             if (!ret)
             {
                 std::clog << "client read failed,err=" << ret.error().message() << std::endl;
@@ -65,7 +65,7 @@ boost::system::result<void> async_http(asio_fiber::ThreadContext& ctx)
             resp.set(http::field::server, BOOST_BEAST_VERSION_STRING);
             resp.set(http::field::content_type, "text/html");
 
-            http::async_write(client, resp, asio_fiber::yield);
+            http::async_write(client, resp, asio_fiber::yield());
 
             client.close();
         }).detach();
@@ -77,11 +77,11 @@ boost::system::result<void> async_http(asio_fiber::ThreadContext& ctx)
 int async_main(asio_fiber::ThreadContext& ctx)
 {
     fibers::fiber([&] {
-        asio_fiber::StopGuard<net::steady_timer> t(ctx);
+        asio_fiber::Object<net::steady_timer> t;
         while (!ctx.stopped())
         {
             t.expires_after(std::chrono::seconds(1));
-            auto sig = t.async_wait(asio_fiber::yield);
+            auto sig = t.async_wait(asio_fiber::yield());
             if (!sig)
             {
                 break;
@@ -91,23 +91,23 @@ int async_main(asio_fiber::ThreadContext& ctx)
         }
     }).detach();
 
-    asio_fiber::ThreadGroup tg;
-    tg.add_thread([] (asio_fiber::ThreadContext& ctx) { async_http(ctx); });
+    asio_fiber::ThreadGroup<> tg;
+    tg.add_thread(async_http);
 
     net::signal_set t(ctx, SIGTERM, SIGINT);
-    auto sig = t.async_wait(asio_fiber::yield);
+    auto sig = t.async_wait(asio_fiber::yield());
     if (!sig)
     {
         std::clog << "sig=" << sig.error() << std::endl;
     }
 
-    tg.join_all();
+    tg.stop_all();
 
     return 0;
 }
 
 int main()
 {
-    asio_fiber::ThreadGuard guard;
+    asio_fiber::ThreadGuard<> guard;
     return guard(async_main);
 }

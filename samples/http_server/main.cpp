@@ -152,7 +152,7 @@ service_fn(AsyncStream client, const std::shared_ptr<AppCtx>& app_ctx)
     beast::flat_buffer buf(8096);
     http::request<http::dynamic_body> req;
 
-    auto ret = http::async_read(client, buf, req, asio_fiber::yield);
+    auto ret = http::async_read(client, buf, req, asio_fiber::yield());
     if (!ret)
     {
         std::clog << "client read failed,err=" << ret.error().message() << std::endl;
@@ -186,7 +186,7 @@ service_fn(AsyncStream client, const std::shared_ptr<AppCtx>& app_ctx)
 
     resp.set(http::field::location, loc);
 
-    auto r = http::async_write(client, resp, asio_fiber::yield);
+    auto r = http::async_write(client, resp, asio_fiber::yield());
 
     std::clog << "Send http response=" << loc << ",ok=" << r.has_value() << std::endl;
 
@@ -247,7 +247,7 @@ serve_http(net::io_context& io_ctx, const std::shared_ptr<AppCtx>& app_ctx)
 #endif
     while (true)
     {
-        auto client = acceptor->async_accept(asio_fiber::yield);
+        auto client = acceptor->async_accept(asio_fiber::yield());
         if (!client)
         {
             return client.error();
@@ -282,7 +282,7 @@ async_main(net::io_context& io_ctx)
     fibers::fiber(serve_http, std::ref(io_ctx), app_ctx).detach();
 
     net::signal_set t(io_ctx, SIGTERM, SIGINT);
-    auto sig = t.async_wait(asio_fiber::yield);
+    auto sig = t.async_wait(asio_fiber::yield());
     if (!sig)
     {
         std::clog << "sig=" << sig.error() << std::endl;
@@ -300,6 +300,6 @@ int main(int argc, const char *argv[])
         return -1;
     }
 
-    asio_fiber::ThreadGuard guard;
+    asio_fiber::ThreadGuard<> guard;
     return guard(async_main) ? 0 : -1;
 }
