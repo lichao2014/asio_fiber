@@ -3,8 +3,8 @@
 #include "boost/asio.hpp"
 #include "boost/beast.hpp"
 
-#include "asio_fiber/async_result.h"
-#include "asio_fiber/thread.h"
+#include "asio_fiber/yield.h"
+#include "asio_fiber/object.h"
 
 namespace fibers = boost::fibers;
 namespace this_fiber = boost::this_fiber;

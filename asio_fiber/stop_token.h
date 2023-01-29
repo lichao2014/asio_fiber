@@ -37,7 +37,7 @@ public:
         _tokens.clear();
     }
 
-    void add_token(StopToken& token)
+    void add_token(StopToken& token) noexcept
     {
         _tokens.push_back(token);
     }

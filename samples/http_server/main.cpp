@@ -17,7 +17,7 @@
     #include "boost/asio/ssl.hpp"
 #endif
 
-#include "asio_fiber/async_result.h"
+#include "asio_fiber/yield.h"
 #include "asio_fiber/thread.h"
 
 namespace fibers = boost::fibers;
